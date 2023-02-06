@@ -5,6 +5,7 @@ import aiologger
 import logging
 import signal
 import uuid
+import re
 
 # Exception handling for asyncio loop.
 def handle_exception(loop, context):
@@ -17,7 +18,7 @@ async def shutdown(loop, signal = None):
     if signal:
         await logger.info(f"Received exit signal {signal.name}...")
     
-    # Make a list of tasks.
+    # Make a list of tasks, not including this shutdown task.
     tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
     
     # Cancel all tasks.
@@ -29,12 +30,13 @@ async def shutdown(loop, signal = None):
     await logger.shutdown()
     # Stopping AsyncIO loop.
     loop.stop()
-            
+
 class WorkingURL:
     def __init__(self, url_id: str, domain: str, url: str):
         self.url_id = url_id
         self.domain = domain
         self.url = url
+
 
 # Make a list of potential URLs from domain.    
 def make_url_list(domain: str):
@@ -46,26 +48,48 @@ def make_url_list(domain: str):
 
 async def get_page(url: WorkingURL, session: aiohttp.ClientSession, return_body = False)-> WorkingURL:
     
+    TITLE_RE = re.compile(r'<title>(.*?)</title>', flags = re.IGNORECASE)
+    
     try:
             async with session.get(url.url) as response:
-            
-                url.response = response
+                
+                url.response: aiohttp.ClientResponse = response
                 url.response_text = None
-                await logger.debug(f"{url.url_id} - response code {response.status} - {response.url}")
-
+               
+                if response.status == 200:
+                    logger.debug(f"{url.url_id} - {response.status} OK - {response.url}")
+                else:
+                    await logger.debug(f"{url.url_id} - response code {response.status} - {response.url}")
+                    
+                    
+                if response.status == 403:  # Forbidden
+                    #TODO: Common websites return this.  Find out why and respond accordingly.  Could be SSL or other issue.
+                    await logger.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
+                    response.close()
+                    return url
+                
                 if response.status >= 400:
                     await logger.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
+                    response.close()
                     return url
                 
                 if return_body:
                     if response.status == 200:
-                        url.response_text = await response.text()
                         await logger.debug(f"{url.url_id} - getting html page from URL - {response.url}")
+                        url.response_text = await response.text()
+                        # Get page title
+                        if title :=  TITLE_RE.search(url.response_text): # if not Null
+                            url.title = title.group(1) # then assign what's between title tags
+                            await logger.debug(f"{url.url_id} - got page title - {url.title} for url: {response.url}")
+                        else:
+                            url.title = None # Title not found
+                            await logger.debug(f"{url.url_id} - Title not foudn in page for url: {response.url}") 
                     else:
                         await logger.debug(f"{url.url_id} - response status {response.status} so not attempting to retrieve html page from URL - {response.url}")        
                 # Explicitly close the session    
                 response.close()
             return url
+        
     except aiohttp.ClientConnectionError as err:
         await logger.info(f"{url.url_id} - Connection error - {url.domain} - {url.url} - {err}")
         return url
@@ -74,7 +98,12 @@ async def get_page(url: WorkingURL, session: aiohttp.ClientSession, return_body 
         await logger.info(f"{url.url_id} - Get page cancelled - {url.domain} - {url.url} - {err}")
         response.close()
         return url
-            
+    
+    except Exception as err:
+        await logger.info(f"{url.url_id} - get_page unknown Exception - {url.domain} - {url.url} - {err}")
+        return url
+
+
 # Queues a series of URL objects built from a list of domains, for later processing.       
 async def make_urls(queue, filename: str):
 
@@ -92,11 +121,10 @@ async def make_urls(queue, filename: str):
 
 
 async def test_urls(queue):
-    # Use this session for direct website access without a proxy server.
     # Setup aiohttp sessions
     DNS_CACHE_SECONDS = 10 # Default is 10 seconds.  Decrease if using millions of domains.
-    PARALLEL_CONNECTIONS = 100 # Simultaneous TCP connections tracked by aiohttp session
-    PER_HOST_CONNECTIONS = 10 # Maximum connections per host.  Keep low.  Default is infinite.
+    PARALLEL_CONNECTIONS = 300 # Simultaneous TCP connections tracked by aiohttp session
+    PER_HOST_CONNECTIONS = 5 # Maximum connections per host.  Keep low.  Default is infinite.
     
     # aiohttp ssl, proxy, and connection docs: https://docs.aiohttp.org/en/stable/client_advanced.html#client-session
     # See the following for proxy TLS in TLS: https://github.com/aio-libs/aiohttp/discussions/6044#discussioncomment-1432443
@@ -108,7 +136,7 @@ async def test_urls(queue):
         while True:
             url = await queue.get()
             await logger.info(f"Processing URls for domain {url.domain}")
-            asyncio.create_task(get_page(url, session))
+            asyncio.create_task(get_page(url, session, return_body = True))
 
                
 def main():
@@ -159,7 +187,3 @@ if __name__ == '__main__':
     logger = aiologger.Logger.with_default_handlers(formatter=aio_formatter)
     
     main()
-
-    
-    
-    
