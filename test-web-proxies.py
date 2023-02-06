@@ -29,13 +29,7 @@ async def shutdown(loop, signal = None):
     await logger.shutdown()
     # Stopping AsyncIO loop.
     loop.stop()
-    
-    
-async def close_sessions(sessions: list[aiohttp.ClientSession]):
-    for session in sessions:
-        asyncio.create_task(session.close())
-        asyncio.create_task(logger.info(f"Closing aiohttp sessions."))
-          
+            
 class WorkingURL:
     def __init__(self, url_id: str, domain: str, url: str):
         self.url_id = url_id
@@ -51,23 +45,30 @@ def make_url_list(domain: str):
 
 
 async def get_page(url: WorkingURL, session: aiohttp.ClientSession, return_body = False)-> WorkingURL:
-    async with session.get(url.url) as response:
-        
-        url.response = response
-        url.response_text = None
-        await logger.debug(f"{url.url_id} - response code {response.status} - {response.url}")
+    
+    try:
+            async with session.get(url.url) as response:
+            
+                url.response = response
+                url.response_text = None
+                await logger.debug(f"{url.url_id} - response code {response.status} - {response.url}")
 
-        if response.status >= 400:
-            await logger.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
+                if response.status >= 400:
+                    await logger.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
+                    return url
+                
+                if return_body:
+                    if response.status == 200:
+                        url.response_text = await response.text()
+                        await logger.debug(f"{url.url_id} - getting html page from URL - {response.url}")
+                    else:
+                        await logger.debug(f"{url.url_id} - response status {response.status} so not attempting to retrieve html page from URL - {response.url}")        
+                # Explicitly close the session    
+                response.close()
             return url
-        
-        if return_body:
-            if response.status == 200:
-                url.response_text = await response.text()
-                await logger.debug(f"{url.url_id} - getting html page from URL - {response.url}")
-            else:
-                await logger.debug(f"{url.url_id} - response status {response.status} so not attempting to retrieve html page from URL - {response.url}")        
-                  
+    except asyncio.CancelledError as err:     
+        await logger.info(f"{url.url_id} - Get page cancelled - {url.domain} - {url.url} - {err}")
+        response.close()
         return url
             
 # Queues a series of URL objects built from a list of domains, for later processing.       
@@ -88,8 +89,7 @@ async def make_urls(queue):
        
 
 
-# Note: sessions should be reused for performance and not constantly re-created.
-async def new_direct_aiohttp_session():
+async def test_urls(queue):
     # Use this session for direct website access without a proxy server.
     # Setup aiohttp sessions
     DNS_CACHE_SECONDS = 10 # Default is 10 seconds.  Decrease if using millions of domains.
@@ -101,15 +101,12 @@ async def new_direct_aiohttp_session():
     
     direct_tcp_connector = aiohttp.TCPConnector(verify_ssl=True, limit = PARALLEL_CONNECTIONS,
                                                 limit_per_host = PER_HOST_CONNECTIONS, ttl_dns_cache = DNS_CACHE_SECONDS)
-    return aiohttp.ClientSession(connector = direct_tcp_connector)
-
-
-async def test_urls(queue):
-    session = await new_direct_aiohttp_session()
-    while True:
-        url = await queue.get()
-        await logger.info(f"Processing URls for domain {url.domain}")
-        asyncio.create_task(get_page(url, session))
+    
+    async with aiohttp.ClientSession(connector = direct_tcp_connector) as session:   
+        while True:
+            url = await queue.get()
+            await logger.info(f"Processing URls for domain {url.domain}")
+            asyncio.create_task(get_page(url, session))
 
                
 def main():
