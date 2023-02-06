@@ -66,27 +66,29 @@ async def get_page(url: WorkingURL, session: aiohttp.ClientSession, return_body 
                 # Explicitly close the session    
                 response.close()
             return url
+    except aiohttp.ClientConnectionError as err:
+        await logger.info(f"{url.url_id} - Connection error - {url.domain} - {url.url} - {err}")
+        return url
+
     except asyncio.CancelledError as err:     
         await logger.info(f"{url.url_id} - Get page cancelled - {url.domain} - {url.url} - {err}")
         response.close()
         return url
             
 # Queues a series of URL objects built from a list of domains, for later processing.       
-async def make_urls(queue):
-    # TODO: Read domains from file.
-    domains = ["google.com", "yahoo.com", "bing.com"]
-    
-    for domain in domains:
-        await logger.debug(f"Queuing URLs for domain {domain}") 
-        for url in make_url_list(domain):
+async def make_urls(queue, filename: str):
 
-            url_id = str(uuid.uuid4()) # UUID for each URL
-            url = WorkingURL(url_id = url_id, domain = domain, url = url)
-            
-            # Queue the URL object for later processing.
-            asyncio.create_task(queue.put(url))
-            await logger.debug(f"{url.url_id} for {url.url} queued.")
-       
+    async with aiofiles.open(filename, mode = "r") as domains:
+        async for raw_domain in domains:
+            domain = raw_domain.strip().lower()
+            await logger.debug(f"Queuing URLs for domain {domain}") 
+
+            # queue an async task for various combinations of domain and protocol
+            for url in make_url_list(domain):
+                url_id = str(uuid.uuid4()) # UUID for each URL
+                url = WorkingURL(url_id = url_id, domain = domain, url = url)
+                asyncio.create_task(queue.put(url))
+                await logger.debug(f"{url.url_id} for {url.url} queued.")
 
 
 async def test_urls(queue):
@@ -127,8 +129,9 @@ def main():
     loop.set_exception_handler(handle_exception)
     queue = asyncio.Queue()
 
+    DOMAIN_FILENAME = "domains.txt"
     try:
-        loop.create_task(make_urls(queue)) # publish
+        loop.create_task(make_urls(queue, DOMAIN_FILENAME)) # publish
         loop.create_task(test_urls(queue)) # consume. Find working URLs
         # TODO: Write good URLs for consumption instead of generating every time.
         # TODO: good URLs can be tested against multiple proxy servers here.
