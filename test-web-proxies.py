@@ -1,9 +1,7 @@
 import aiohttp
 import asyncio
 import aiofiles
-import aiocsv
 import aiologger
-import csv
 import logging
 import signal
 import uuid
@@ -50,76 +48,77 @@ def make_url_list(domain: str):
  
     return (f"{protocol}://{hostname}.{domain}" for protocol in protocols for hostname in hostnames)
 
+def extract_page_data(url: WorkingURL):
+    if url:
+        if url.response_text:
+            soup = BeautifulSoup(url.response_text, "html.parser")
+        
+            title_tag = soup.find("title")
+            rating_meta = soup.find("meta", attrs={"name": "rating"})
+            
+            if rating_meta:
+                url.rating = rating_meta["content"] if rating_meta["content"].isprintable() else None
+            else:
+                url.rating = None
+                
+            if title_tag:
+                url.title = title_tag.text if title_tag.text.isprintable() else None
+            else:
+                url.title = None
+    
 
-async def get_page(page_queue: asyncio.Queue, url: WorkingURL, session: aiohttp.ClientSession, return_body = False):
-    
-    TITLE_RE = re.compile(r'<title>(.*?)</title>', flags = re.IGNORECASE)
-    RATING_RE = re.compile(r'<meta\s+name\s*=\s*"rating"\s+content\s*=\s*"(.*?)"\s*>',flags = re.IGNORECASE)
-    
+async def get_page(page_queue: asyncio.Queue, url: WorkingURL, session: aiohttp.ClientSession, return_body = False):   
     try:
-            async with session.get(url.url) as response:
+        async with session.get(url.url) as response:
+            
+            url.response: aiohttp.ClientResponse = response
+            url.response_text = None
+            
+            if response.status == 200:
+                logger.debug(f"{url.url_id} - {response.status} OK - {response.url}")
+            else:
+                await logger.debug(f"{url.url_id} - response code {response.status} - {response.url}")
                 
-                url.response: aiohttp.ClientResponse = response
-                url.response_text = None
-               
-                if response.status == 200:
-                    logger.debug(f"{url.url_id} - {response.status} OK - {response.url}")
-                else:
-                    await logger.debug(f"{url.url_id} - response code {response.status} - {response.url}")
-                    
-                if response.status == 403:  # Forbidden
-                    #TODO: Common websites return this.  Find out why and respond accordingly.  Could be SSL or other issue.
-                    await logger.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
-                    response.close()
-                    return None
-                
-                if response.status >= 400:
-                    await logger.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
-                    response.close()
-                    return None
-                
-                if return_body:
-                    if response.status == 200:
-                        await logger.debug(f"{url.url_id} - getting html page from URL - {response.url}")
-                        url.response_text = await response.text()
-                        
-                        # Get page rating if it exists.
-                        if rating :=  RATING_RE.search(url.response_text): # if not Null
-                            url.rating = rating.group(1) #  tags
-                            await logger.debug(f"{url.url_id} - got page rating - {url.rating} for url: {response.url}")
-                        else:
-                            url.rating = None # Rating not found
-                            await logger.debug(f"{url.url_id} - Rating not found in page for url: {response.url}")
-                            
-                        # Get page title
-                        if title :=  TITLE_RE.search(url.response_text): # if not Null
-                            url.title = title.group(1) # then assign what's between title tags
-                            await logger.debug(f"{url.url_id} - got page title - {url.title} for url: {response.url}")
-                            
-                            # Queue good page for processing
-                            asyncio.create_task(page_queue.put(url))
-                            await logger.debug(f"{url.url_id} 200 OK and Title found for {url.url}, queued for further processing.") 
-                        else:
-                            url.title = None # Title not found
-                            await logger.debug(f"{url.url_id} - Title not found in page for url: {response.url}") 
-                    else:
-                        await logger.debug(f"{url.url_id} - response status {response.status} so not attempting to retrieve html page from URL - {response.url}")        
-                # Explicitly close the session    
+            if response.status == 403:  # Forbidden
+                #TODO: Common websites return this.  Find out why and respond accordingly.  Could be SSL or other issue.
+                await logger.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
                 response.close()
+                return None
+            
+            if response.status >= 400:
+                await logger.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
+                response.close()
+                return None
+            
+            if return_body:
+                if response.status == 200:
+                    await logger.debug(f"{url.url_id} - getting html page from URL - {response.url}")
+                    url.response_text = await response.text()
+                    
+                    extract_page_data(url)
+
+                    # Get page title
+                    if url.title:
+                        await logger.debug(f"{url.url_id} 200 OK and Title found for {url.url}, queued for further processing.") 
+                        # Queue good page for processing
+                        asyncio.create_task(page_queue.put(url))
+                    else:
+                        await logger.debug(f"{url.url_id} - Title not found in page for url: {response.url}") 
+                else:
+                    await logger.debug(f"{url.url_id} - response status {response.status} so not attempting to retrieve html page from URL - {response.url}")        
+            # Explicitly close the session    
+            response.close()
                        
         
     except aiohttp.ClientConnectionError as err:
         await logger.error(f"{url.url_id} - Connection error - {url.domain} - {url.url} - {err}")
-        return url
 
     except asyncio.CancelledError as err:     
         await logger.info(f"{url.url_id} - Get page cancelled - {url.domain} - {url.url} - {err}")
         response.close()
-        return url
     
     except Exception as err:
         await logger.error(f"{url.url_id} - get_page unknown Exception - {url.domain} - {url.url} - {err}")
-        return url
 
 
 # Queues a series of URL objects built from a list of domains, for later processing.       
@@ -130,6 +129,7 @@ async def make_urls(queue, filename: str):
             await logger.debug(f"Queuing URLs for domain {domain}") 
 
             # queue an async task for various combinations of domain and protocol
+            
             for url in make_url_list(domain):
                 url_id = str(uuid.uuid4()) # UUID for each URL
                 url = WorkingURL(url_id = url_id, domain = domain, url = url)
@@ -155,21 +155,26 @@ async def test_urls(queue, page_queue):
             await logger.info(f"Getting page for {url.url}")
             asyncio.create_task(get_page(page_queue, url, session, return_body = True))
 
-
 # Write page data to file. 
 async def write_page_info(page_queue, PAGEINFO_FILENAME):
     async with aiofiles.open(PAGEINFO_FILENAME, mode = "w", encoding="utf-8", newline="") as page_info_file:
-        csv_writer = aiocsv.AsyncWriter(page_info_file, quoting=csv.QUOTE_ALL)
         while True:
             url = await page_queue.get() # Pull WorkingURL object and write data to file.
             await logger.info(f"Writing page info for {url.url_id} - {url.url}")
-            asyncio.create_task(write_csv_line(csv_writer, url))
+            await page_info_file.write(f'"{url.url_id}","{url.response.status}","{url.domain}","{url.url}","{url.response.url}","{url.title}","{url.rating}"\n')
+            # Creating task with writer puts random binary in file.  Probably trashes write pointer.
+            #asyncio.create_task(write_csv_line(page_info_file, url))
 
-
+""" BROKEN: Writes records too many times to file
 # Write line to open file.  Launch as task for max asyncio concurrency.
 async def write_csv_line(csv_writer: aiocsv.AsyncWriter, url: WorkingURL):
-    await csv_writer.writerow([url.url_id, url.response.status, url.domain, url.url, url.response.url, url.title])
-    
+    await csv_writer.writerow([url.url_id, url.response.status, url.domain, url.url, url.response.url, url.title, url.rating])
+"""
+
+""" BROKEN: Random binary appears when this is called as a task.  An await in the caller works.  The write pointer probably gets trashed.
+async def write_csv_line(file_handle, url: WorkingURL):
+    await file_handle.write(f'"{url.url_id}","{url.response.status}","{url.domain}","{url.url}","{url.response.url}","{url.title}","{url.rating}"\n')
+"""
                         
 def main():
 
@@ -208,7 +213,7 @@ def main():
 if __name__ == '__main__':
     
     # Set up logging
-    LOG_LEVEL = logging.INFO
+    LOG_LEVEL = logging.WARN
     #LOG_LEVEL = logging.DEBUG
     LOG_FMT_STR = "%(asctime)s,%(msecs)d %(levelname)s: %(message)s"
     LOG_DATEFMT_STR = "%H:%M:%S"
@@ -216,9 +221,5 @@ if __name__ == '__main__':
         
     logging.basicConfig(level=LOG_LEVEL, format=LOG_FMT_STR, datefmt=LOG_DATEFMT_STR)
     logger = aiologger.Logger.with_default_handlers(level=LOG_LEVEL, formatter=aio_formatter)
-    
-    
-    
-
     
     main()
