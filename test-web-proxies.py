@@ -1,4 +1,5 @@
 import aiohttp
+# import aiodns  <-- be sure aiodns is installed.  It's used by aiohttp to speed up DNS lookups.
 import asyncio
 import aiofiles
 import aiologger
