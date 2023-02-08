@@ -283,22 +283,23 @@ def main():
 
     loop = asyncio.new_event_loop()
     
-    # Signal handler for more graceful shutdown at any point during runtime. 
-    #Build list of supported signals for environment
-    signals = (x for x in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT) if x._name_ in dir(signal))
+    if sys.platform != 'win32':
+        # Signal handler for more graceful shutdown at any point during runtime. 
+        #Build list of supported signals for environment
+        signals = (x for x in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT) if x._name_ in dir(signal))
 
-    #  add_signal_handler Not implemented in Windows but is supported on *NIX and works well.
-    try:
-        for s in signals:
-            loop.add_signal_handler(
-                # signal=signal fixes late binding with lambda.  Google it.
-                s, lambda s=s: asyncio.create_task(shutdown(loop, signal=s))
-            )
-        signal_handler_attached = True
-        
-    except NotImplementedError:
-        signal_handler_attached = False
-        pass
+        #  add_signal_handler Not implemented in Windows but is supported on *NIX and works well.
+        try:
+            for s in signals:
+                loop.add_signal_handler(
+                    # signal=signal fixes late binding with lambda.  Google it.
+                    s, lambda s=s: asyncio.create_task(shutdown(loop, signal=s))
+                )
+            signal_handler_attached = True
+            
+        except NotImplementedError:
+            signal_handler_attached = False
+            pass
 
     loop.set_exception_handler(handle_exception)
 
