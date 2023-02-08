@@ -6,9 +6,7 @@ import logging
 import signal
 import uuid
 import sys
-import os
-
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup # pip install BeautifulSoup4
 
 
 # Exception handling for asyncio loop.
@@ -74,7 +72,7 @@ def extract_page_data(url: WorkingURL):
                 url.title = None
     
 
-async def get_page(page_queue: asyncio.Queue, url: WorkingURL, session: aiohttp.ClientSession, return_body = False):   
+async def get_page(good_queue: asyncio.Queue, url: WorkingURL, session: aiohttp.ClientSession, return_body = False):   
     try:
         async with session.get(url.url) as response:
             
@@ -108,7 +106,7 @@ async def get_page(page_queue: asyncio.Queue, url: WorkingURL, session: aiohttp.
                     if url.title:
                         logging.debug(f"{url.url_id} 200 OK and Title found for {url.url}, queued for further processing.") 
                         # Queue good page for processing
-                        asyncio.create_task(page_queue.put(url))
+                        asyncio.create_task(good_queue.put(url))
                     else:
                         logging.debug(f"{url.url_id} - Title not found in page for url: {response.url}") 
                 else:
@@ -116,12 +114,16 @@ async def get_page(page_queue: asyncio.Queue, url: WorkingURL, session: aiohttp.
             # Explicitly close the session    
             response.close()
                        
-        
+    except TypeError as err:
+        # Write catestrophic error immediately instead of queuing
+        logging.error(f"get_page - TypeError exception {err}")
+        return
+
     except aiohttp.ClientConnectionError as err:
-        logging.error(f"{url.url_id} - Connection error - {url.domain} - {url.url} - {err}")
+        logging.error(f"get_page: {url.url_id} - Connection error - {url.domain} - {url.url} - {err}")
 
     except asyncio.CancelledError as err:     
-        logging.info(f"{url.url_id} - Get page cancelled - {url.domain} - {url.url} - {err}")
+        logging.info(f"get_page: {url.url_id} - Get page cancelled - {url.domain} - {url.url} - {err}")
         response.close()
     
     except Exception as err:
@@ -129,8 +131,7 @@ async def get_page(page_queue: asyncio.Queue, url: WorkingURL, session: aiohttp.
 
 
 # Queues a series of URL objects built from a list of domains, for later processing.       
-async def make_urls(queue, filename: str):
-
+async def make_urls(test_queue, filename: str):
     try:
         async with aiofiles.open(filename, mode = "rt") as domains:
             async for raw_domain in domains:
@@ -142,9 +143,13 @@ async def make_urls(queue, filename: str):
                 for url in make_url_list(domain):
                     url_id = str(uuid.uuid4()) # UUID for each URL
                     url = WorkingURL(url_id = url_id, domain = domain, url = url)
-                    asyncio.create_task(queue.put(url))
+                    asyncio.create_task(test_queue.put(url))
                     logging.debug(f"{url.url_id} for {url.url} queued.")
-    
+    except TypeError as err:
+        # Write catestrophic error immediately instead of queuing
+        logging.error(f"make_urls - TypeError exception {err}")
+        return
+
     except NotImplementedError as err:
         logging.error(f"make_urls - NotImplementedError exception.  Exiting make_urls. - {err}")
         return
@@ -155,38 +160,103 @@ async def make_urls(queue, filename: str):
         return
 
 
-async def test_urls(queue, page_queue):
-    # Setup aiohttp sessions
-    DNS_CACHE_SECONDS = 10 # Default is 10 seconds.  Decrease if using millions of domains.
-    PARALLEL_CONNECTIONS = 300 # Simultaneous TCP connections tracked by aiohttp session
-    PER_HOST_CONNECTIONS = 5 # Maximum connections per host.  Keep low.  Default is infinite.
-    
-    # aiohttp ssl, proxy, and connection docs: https://docs.aiohttp.org/en/stable/client_advanced.html#client-session
-    # See the following for proxy TLS in TLS: https://github.com/aio-libs/aiohttp/discussions/6044#discussioncomment-1432443
-    
-    direct_tcp_connector = aiohttp.TCPConnector(verify_ssl=True, limit = PARALLEL_CONNECTIONS,
-                                                limit_per_host = PER_HOST_CONNECTIONS, ttl_dns_cache = DNS_CACHE_SECONDS)
-    
-    async with aiohttp.ClientSession(connector = direct_tcp_connector) as session:
-        while True:
-            url = await queue.get()
-            logging.info(f"Getting page for {url.url}")
-            asyncio.create_task(get_page(page_queue, url, session, return_body = True))
+async def test_urls(test_queue, good_queue):
+    try:
+        # Setup aiohttp sessions
+        DNS_CACHE_SECONDS = 10 # Default is 10 seconds.  Decrease if using millions of domains.
+        PARALLEL_CONNECTIONS = 300 # Simultaneous TCP connections tracked by aiohttp session
+        PER_HOST_CONNECTIONS = 5 # Maximum connections per host.  Keep low.  Default is infinite.
+        
+        # aiohttp ssl, proxy, and connection docs: https://docs.aiohttp.org/en/stable/client_advanced.html#client-session
+        # See the following for proxy TLS in TLS: https://github.com/aio-libs/aiohttp/discussions/6044#discussioncomment-1432443
+        
+        direct_tcp_connector = aiohttp.TCPConnector(verify_ssl=True, limit = PARALLEL_CONNECTIONS,
+                                                    limit_per_host = PER_HOST_CONNECTIONS, ttl_dns_cache = DNS_CACHE_SECONDS)
+        
+        async with aiohttp.ClientSession(connector = direct_tcp_connector) as session:
+            while True:
+                url = await test_queue.get()
+                logging.info(f"Getting page for {url.url}")
+                asyncio.create_task(get_page(good_queue, url, session, return_body = True))
+    except TypeError as err:
+        # Write catestrophic error immediately instead of queuing
+        logging.error(f"test_urls - TypeError exception {err}")
+        return
 
 
-# Write page data to file. 
-async def write_page_info(page_queue, filename):
+# Subscriber writes page data to CSV file. 
+async def write_page_info(queue, filename):
     try:
         async with aiofiles.open(filename, mode = "w", encoding="utf-8", newline="") as page_info_file:
             while True:
-                url = await page_queue.get() # Pull WorkingURL object and write data to file.
+                url = await queue.get() # Pull WorkingURL object and write data to file.
                 logging.info(f"Writing page info for {url.url_id} - {url.url}")
                 await page_info_file.write(f'"{url.url_id}","{url.response.status}","{url.domain}","{url.url}","{url.response.url}","{url.title}","{url.rating}"\n')
+                
+                # DO NOT USE "create_task()" to write line. mcox 2/7/2023
                 # Creating task with writer puts random binary in file.  Probably trashes write pointer.
-                #asyncio.create_task(write_csv_line(page_info_file, url))
+                # asyncio.create_task(write_csv_line(page_info_file, url))
+    except TypeError as err:
+        # Write catestrophic error immediately instead of queuing
+        logging.error(f"write_page_info - TypeError exception {err}")
+        return      
     except (OSError, FileExistsError, FileNotFoundError) as err:
         # Write catestrophic error immediately instead of queuing
         logging.error(f"write_page_info - Problem with writing file {filename}. Exiting async file writing task. {err}")
+        return
+
+# Subscriber compares direct page and proxy pages to see if proxies are similar 
+# to each other.  Direct page is baseline "working" page.
+# Compare Forcepoint and Skyhigh (Mcafee) return info and report on differences.
+async def compare_proxy_page(url: WorkingURL, session: aiohttp.ClientSession):
+    # await Get page from forcepoint
+    # await Get page from McAfee
+    # Compare and report differences
+    try:
+        logging.debug(f"compare_proxy_page: TODO: {url.url}")
+        pass
+    except TypeError as err:
+        # Write catestrophic error immediately instead of queuing
+        logging.error(f"compare_proxy_page - TypeError exception {err}")
+        return
+
+
+# Compare good page from direct Internet, Forcepoint, Skyhigh proxies
+async def compare_proxy_servers(queue: asyncio.Queue):
+    try: 
+        # Setup aiohttp sessions
+        DNS_CACHE_SECONDS = 10 # Default is 10 seconds.  Decrease if using millions of domains.
+        PARALLEL_CONNECTIONS = 300 # Simultaneous TCP connections tracked by aiohttp session
+        PER_HOST_CONNECTIONS = 5 # Maximum connections per host.  Keep low.  Default is infinite.
+
+        # aiohttp ssl, proxy, and connection docs: https://docs.aiohttp.org/en/stable/client_advanced.html#client-session
+        # See the following for proxy TLS in TLS: https://github.com/aio-libs/aiohttp/discussions/6044#discussioncomment-1432443
+        proxy_tcp_connector = aiohttp.TCPConnector(verify_ssl=True, limit = PARALLEL_CONNECTIONS,
+                                                limit_per_host = PER_HOST_CONNECTIONS, ttl_dns_cache = DNS_CACHE_SECONDS)
+
+        async with aiohttp.ClientSession(connector = proxy_tcp_connector) as session:
+            while True:
+                url: WorkingURL = await queue.get()
+                logging.debug(f"compare_proxy_servers: comparing proxy server pages for {url.url}")
+                asyncio.create_task(compare_proxy_page(url, session))
+    except TypeError as err:
+        # Write catestrophic error immediately instead of queuing
+        logging.error(f"compare_proxy_servers: - TypeError exception {err}")
+        return
+
+# Get WorkingURL object from in_queue, publish to list of out_queues
+async def publisher(in_queue: asyncio.Queue, out_queues):
+    try:
+        while True:
+            url = await in_queue.get()
+            for queue in out_queues:
+                asyncio.create_task(queue.put(url))
+    
+    except TypeError as err:
+        # Write catestrophic error immediately instead of queuing
+        # Note: copy.deepcopy() on url object produced this error
+        #     TypeError exception can't pickle multidict._multidict.CIMultiDictProxy objects
+        logging.error(f"publisher: - TypeError exception {err}")
         return
 
 
@@ -231,16 +301,30 @@ def main():
         pass
 
     loop.set_exception_handler(handle_exception)
-    queue = asyncio.Queue() # WorkingURL objects for which page must be read
-    page_queue = asyncio.Queue() # WorkingURL objects after page read successfully.  Need to write data to file.
+
+    # Publisher queue chain
+    url_queue = asyncio.Queue() # WorkingURL objects with candidate URLs to get good pages
+    good_page_queue = asyncio.Queue() # WorkingURL objects after page read successfully.  Consumed to write CSV file.
+
+    # Subscriber queues.  Sends references to WorkingURL objects
+    csv_queue = asyncio.Queue() # subscriber queue of WorkingURL objects for csv writer
+    proxy_queue = asyncio.Queue() # subscriber queue of WorkingURL objects to compare proxy server results
+    subscriber_queues = (csv_queue, proxy_queue) # For publisher coro to distribute good pages to tasks
 
     DOMAIN_FILENAME = "domains.txt"
     PAGEINFO_FILENAME = "page_info.csv"
     try:
-        loop.create_task(make_urls(queue, DOMAIN_FILENAME)) # publish
-        loop.create_task(test_urls(queue, page_queue)) # consume. Find working URLs
-        loop.create_task(write_page_info(page_queue, PAGEINFO_FILENAME))
-        # TODO: good URLs can be tested against multiple proxy servers here.
+        # Distribute deep copies of good pages to processing queues.
+        loop.create_task(publisher(good_page_queue, subscriber_queues)) 
+        # Build and publish URLs from domain list.  
+        loop.create_task(make_urls(url_queue, DOMAIN_FILENAME)) 
+        # Test URLs and publish "good" pages. 200 OK, with title, etc.
+        loop.create_task(test_urls(url_queue, good_page_queue)) #
+        # Write good URL data to CSV file.
+        loop.create_task(write_page_info(csv_queue, PAGEINFO_FILENAME))
+        # Compare good page to Forcepoint and Skyhigh proxy results
+        loop.create_task(compare_proxy_servers(proxy_queue))
+       
         # GO!!!!
         loop.run_forever()
     finally:
@@ -254,6 +338,7 @@ if __name__ == '__main__':
     # Set up logging
     LOG_LEVEL = logging.WARN
     LOG_LEVEL = logging.DEBUG
+    LOG_LEVEL = logging.ERROR
     LOG_FMT_STR = "%(asctime)s,%(msecs)d %(levelname)s: %(message)s"
     LOG_DATEFMT_STR = "%H:%M:%S"
 
