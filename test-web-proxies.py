@@ -285,7 +285,7 @@ def main():
     
     # Signal handler for more graceful shutdown at any point during runtime. 
     #Build list of supported signals for environment
-    signals = ("signal."+ x for x in ("SIGHUP", "SIGTERM", "SIGINT") if x in dir(signal))
+    signals = (x for x in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT) if x._name_ in dir(signal))
 
     #  add_signal_handler Not implemented in Windows but is supported on *NIX and works well.
     try:
@@ -336,9 +336,10 @@ def main():
             
 if __name__ == '__main__':    
     # Set up logging
-    LOG_LEVEL = logging.WARN
-    LOG_LEVEL = logging.DEBUG
-    LOG_LEVEL = logging.ERROR
+    #LOG_LEVEL = logging.WARN
+    LOG_LEVEL = logging.INFO
+    #LOG_LEVEL = logging.DEBUG
+    #LOG_LEVEL = logging.ERROR
     LOG_FMT_STR = "%(asctime)s,%(msecs)d %(levelname)s: %(message)s"
     LOG_DATEFMT_STR = "%H:%M:%S"
 
