@@ -82,69 +82,69 @@ def extract_page_data(url: WorkingURL):
                     url.title = None
     except TypeError as err:
         logging.error(f"extract_page_data - TypeError exception {err}")
-        return
+    except Exception as err:
+        logging.error(f"extract_page_data: unknown Exception {type(err).__name__} - {err}")
 
 
 async def get_page(url: WorkingURL, session: aiohttp.ClientSession, return_body = False,  queue: asyncio.Queue = None,  proxy_url: str = None):   
     if proxy_url:
-        pass #logging.debug(f'get_page: Proxy parameters passed are proxy_url: {proxy_url}. WorkingURL object type is: {type(url)}. session type is: {type(session)}. queue type: {type(queue)}. url.url type is: {type(url.url)}')
+        logging.debug(f'get_page: Proxy parameters passed are proxy_url: {proxy_url}. WorkingURL object type is: {type(url)}. session type is: {type(session)}. queue type: {type(queue)}. url.url type is: {type(url.url)}')
     else:
-        pass #logging.debug(f'get_page: Non-Proxy parameters passed are proxy_url: {proxy_url}. WorkingURL object type is: {type(url)}. session type is: {type(session)}. queue type: {type(queue)}. url.url type is: {type(url.url)}') 
+        logging.debug(f'get_page: Non-Proxy parameters passed are proxy_url: {proxy_url}. WorkingURL object type is: {type(url)}. session type is: {type(session)}. queue type: {type(queue)}. url.url type is: {type(url.url)}') 
 
     try:
-        async with session.get(url.url, proxy = proxy_url) as response:
-            url.response = response
-            url.status = response.status
-            url.title = None
-            url.response_text = None
-            
-            if response.status == 200:
-                pass #logging.debug(f"{url.url_id} - {response.status} OK - {response.url}")
-            else:
-                pass #logging.debug(f"{url.url_id} - response code {response.status} - {response.url}")
+        
+            async with session.get(url.url, proxy = proxy_url) as response:
 
-            # 403 now handled as a normal page.   Let consumers decide what to do with it.
-            """
-            if response.status == 403:  # Forbidden
-                #TODO: Common direct (non proxy) websites return this.  Find out why and respond accordingly.  Could be SSL or other issue.
-                logging.error(f"{url.url_id} - {response.status} - {response.reason} - {response.url}")
-                response.close()
-                return None
-            """
+                # url.response = response   # Don't hang on to this object or close() may not free resources.  Copy values instead
+                url.response_url = None
+                url.status = response.status
+                url.title = None
+                url.response_text = None
 
-            if response.status >= 500:
-                logging.error(f"{url.url_id} - get_page: {response.status} - {response.reason} - {response.url}")
-                response.close()
-                return None
-                
-            if return_body:
-                # Pages that can return some type of body and title should be processed here.
-                if response.status in (200, 401, 403, 451):
-                    pass #logging.debug(f"{url.url_id} - Status Code: {response.status} - getting html page from URL - {response.url}")
-                    
-                    url.response_text = await response.text()
-                    
-                    extract_page_data(url)
-
-                    # Get page title
-                    if url.title:
-                        pass #logging.debug(f"{url.url_id} - Status Code: {response.status} - Title found for {url.url}, queued for further processing.") 
-
-                        if queue:
-                            # Queue good page for processing
-                            asyncio.create_task(queue.put(url))
-                    else:
-                        pass #logging.debug(f"{url.url_id} - Status Code: {response.status} - Title not found in page for url: {response.url}") 
+                if response.status == 200:
+                    url.response_url = response.url
+                    logging.debug(f"{url.url_id} - {response.status} OK - {response.url}")
                 else:
-                    pass #logging.debug(f"{url.url_id} - response status {response.status} so not attempting to retrieve html page from URL - {response.url}")        
-                # Explicitly close the session    
-            if response:
-                response.close()
+                    logging.debug(f"{url.url_id} - response code {response.status} - {response.url}")
+
+
+                if response.status >= 500:
+                    logging.error(f"{url.url_id} - get_page: {response.status} - {response.reason} - {response.url}")
+                    response.close()
+                    return None
+                    
+                if return_body:
+                    # Pages that can return some type of body and title should be processed here.
+                    if response.status in (200, 401, 403, 451):
+                        logging.debug(f"{url.url_id} - Status Code: {response.status} - getting html page from URL - {response.url}")
+                        
+                        url.response_text = await response.text()
+                        url.response_url = response.url
+                        
+                        extract_page_data(url)
+
+                        # Get page title
+                        if url.title:
+                            logging.debug(f"{url.url_id} - Status Code: {response.status} - Title found for {url.url}, queued for further processing.") 
+
+                            if queue:
+                                # Queue good page for processing
+                                #time.sleep(1)
+                                asyncio.create_task(queue.put(url))
+                        else:
+                            logging.debug(f"{url.url_id} - Status Code: {response.status} - Title not found in page for url: {response.url}") 
+                    else:
+                        logging.debug(f"{url.url_id} - response status {response.status} so not attempting to retrieve html page from URL - {response.url}")        
+
+                if response:
+                    # Close the response to recover resources
+                    response.close()
 
     except aiohttp.ClientHttpProxyError: 
         pass
         # Getting UnboundLocalError when this code runs.  Seems to be a referense to "response"
-        #pass #logging.debug(f"{url.url_id} get_page: aiohttp library threw ClientHttpProxyError for proxy {proxy_url} for url {url.url}")
+        #logging.debug(f"{url.url_id} get_page: aiohttp library threw ClientHttpProxyError for proxy {proxy_url} for url {url.url}")
         #response.close()
 
     except aiohttp.InvalidURL as err:
@@ -173,7 +173,7 @@ async def make_urls(test_queue, filename: str):
         async with aiofiles.open(filename, mode = "rt") as domains:
             async for raw_domain in domains:
                 domain = raw_domain.strip().lower()
-                pass #logging.debug(f"Queuing URLs for domain {domain}") 
+                logging.debug(f"Queuing URLs for domain {domain}") 
 
                 # queue an async task for various combinations of domain and protocol
                 
@@ -181,7 +181,7 @@ async def make_urls(test_queue, filename: str):
                     url_id = str(uuid.uuid4()) # UUID for each URL
                     url = WorkingURL(url_id = url_id, domain = domain, url = url)
                     asyncio.create_task(test_queue.put(url))
-                    pass #logging.debug(f"{url.url_id} for {url.url} queued.")
+                    logging.debug(f"{url.url_id} for {url.url} queued.")
 
     except TypeError as err:
         # Write catestrophic error immediately instead of queuing
@@ -198,24 +198,12 @@ async def make_urls(test_queue, filename: str):
         return
 
 
-async def test_urls(test_queue, good_queue):
+async def test_urls(test_queue, good_queue, session: aiohttp.ClientSession):
     try:
-        # Setup aiohttp sessions
-        DNS_CACHE_SECONDS = 10 # Default is 10 seconds.  Decrease if using millions of domains.
-        PARALLEL_CONNECTIONS = 10 # Simultaneous TCP connections tracked by aiohttp session
-        PER_HOST_CONNECTIONS = 1 # Maximum connections per host.  Keep low.  Default is infinite.
-        
-        # aiohttp ssl, proxy, and connection docs: https://docs.aiohttp.org/en/stable/client_advanced.html#client-session
-        # See the following for proxy TLS in TLS: https://github.com/aio-libs/aiohttp/discussions/6044#discussioncomment-1432443
-        
-        direct_tcp_connector = aiohttp.TCPConnector(verify_ssl=True, limit = PARALLEL_CONNECTIONS,
-                                                    limit_per_host = PER_HOST_CONNECTIONS, ttl_dns_cache = DNS_CACHE_SECONDS)
-        
-        async with aiohttp.ClientSession(connector = direct_tcp_connector) as session:
-            while True:
-                url = await test_queue.get()    
-                logging.info(f"Getting page for {url.url}")
-                asyncio.create_task(get_page(url, session, return_body = True, queue=good_queue))
+        while True:
+            url = await test_queue.get()    
+            logging.info(f"Getting page for {url.url}")
+            asyncio.create_task(get_page(url, session, return_body = True, queue=good_queue))
 
     except TypeError as err:
         # Write catestrophic error immediately instead of queuing
@@ -233,9 +221,9 @@ async def write_good_page_info(queue: asyncio.Queue, filename: str):
                 url = await queue.get() # Pull WorkingURL object and write data to file.
 
                 # Write "Good" pages only.
-                if url.response.status == 200:
-                    pass #logging.debug(f"{url.url_id} write_good_page_info: Writing page info for - {url.url}")
-                    await page_info_file.write(f'"{url.url_id}","{url.response.status}","{url.domain}","{url.url}","{url.response.url}","{url.title}","{url.rating}"\n')
+                if url.status == 200:
+                    logging.debug(f"{url.url_id} write_good_page_info: Writing page info for - {url.url}")
+                    await page_info_file.write(f'"{url.url_id}","{url.status}","{url.domain}","{url.url}","{url.response_url}","{url.title}","{url.rating}"\n')
                     # Windows not flushing on unclean shutdown.  Also not honoring signals so flushing to get lines to write
                     if sys.platform == "win32":
                         await page_info_file.flush()
@@ -244,7 +232,7 @@ async def write_good_page_info(queue: asyncio.Queue, filename: str):
                     # Creating task with writer puts random binary in file.  Probably trashes write pointer.
                     # asyncio.create_task(write_csv_line(page_info_file, url))
                 else: 
-                    pass #logging.debug(f"{url.url_id} write_good_page_info: NOT writing page info for status {url.response.status} - {url.url}")
+                    logging.debug(f"{url.url_id} write_good_page_info: NOT writing page info for status {url.status} - {url.url}")
     except AttributeError as err:
         # Write catestrophic error immediately instead of queuing
         logging.error(f"write_good_page_info - Attribute exception {err}")
@@ -256,6 +244,8 @@ async def write_good_page_info(queue: asyncio.Queue, filename: str):
         # Write catestrophic error immediately instead of queuing
         logging.error(f"write_good_page_info - Problem with writing file {filename}. Exiting async file writing task. {err}")
         return
+    except Exception as err:
+        logging.error(f"write_good_page_info: unknown Exception {type(err).__name__} - {err}")
 
 
 # Subscriber writes direct and proxy page data to CSV file for comparison.
@@ -264,15 +254,15 @@ async def write_proxy_page_info(queue: asyncio.Queue, filename: str):
         async with aiofiles.open(filename, mode = "w", encoding="utf-8", newline="") as page_info_file:
             while True:
                 urls = await queue.get() # Pull WorkingURL object and write data to file.
-                url = urls.get("url") # Good direct page
-                proxy_urls = urls.get("proxy_urls") # List of proxy servers and page results
+                url = urls.get("url") # WorkingURL good direct page
+                proxy_urls = urls.get("proxy_urls") # List of proxy servers and WorkingURL page results from each
 
-                pass #logging.debug(f"{url.url_id} write_proxy_page_info: Writing proxy page info for comparison.")
+                logging.debug(f"{url.url_id} write_proxy_page_info: Writing proxy page info for comparison.")
 
-                line = f'"{url.url_id}","{url.domain}","{url.url}","{url.response.url}","{url.response.status}","{url.title}"'
+                line = f'"{url.url_id}","{url.domain}","{url.url}","{url.response_url}","{url.status}","{url.title}"'
                 
                 for p_url in proxy_urls:
-                    line += f',"{p_url.response.status if p_url.response else None}","{p_url.title}"'
+                    line += f',"{p_url.status}","{p_url.title}"'
 
                 await page_info_file.write(f'{line}\n')
                 # Windows not flushing on unclean shutdown.  Also not honoring signals so flushing to get lines to write
@@ -301,9 +291,9 @@ async def write_proxy_page_info(queue: asyncio.Queue, filename: str):
 # Subscriber compares direct page and proxy pages to see if proxies are similar 
 # to each other.  Direct page is baseline "working" page.
 # Compare proxy1 and proxy2 return info and report on differences.
-async def get_url_from_proxy_list(url: WorkingURL, proxy_info: list, queue: asyncio.Queue):
+async def get_url_from_proxy_list(url: WorkingURL, proxy_info: list, queue: asyncio.Queue, session: aiohttp.ClientSession):
     try:
-        pass #logging.debug(f"get_url_from_proxy_list: Retrieving {url.url} via proxy servers.")
+        logging.debug(f"get_url_from_proxy_list: Retrieving {url.url} via proxy servers.")
 
         proxy_status = []
         proxy_titles = []
@@ -312,21 +302,16 @@ async def get_url_from_proxy_list(url: WorkingURL, proxy_info: list, queue: asyn
         # Get the good page in "url" WorkingURL argument for all of the proxy servers in the list
         for index,proxy in enumerate(proxy_info):
             new_urls.append(WorkingURL(url.url_id, url.domain, url.url))
-            await get_page(new_urls[index], proxy.get("session"), return_body = True, proxy_url = proxy.get("proxyurl")) 
+            await get_page(new_urls[index], session, return_body = True, proxy_url = proxy.get("proxyurl")) 
 
-            if hasattr(new_urls[index], "response"):
-                if new_urls[index].response:
-                    pass #logging.debug(f'get_url_from_proxy_list: Proxy Response code: {new_urls[index].response.status} Proxy: {proxy.get("proxyurl")} - {new_urls[index].url}')
-                    proxy_status.append(new_urls[index].response.status)
+            if hasattr(new_urls[index], "status"):
+                    logging.debug(f'get_url_from_proxy_list: Proxy Response code: {new_urls[index].status} Proxy: {proxy.get("proxyurl")} - {new_urls[index].url}')
+                    proxy_status.append(new_urls[index].status)
                     proxy_titles.append(new_urls[index].title)
-                else:
-                    proxy_status.append(None)
-                    proxy_titles.append(None)
-                    pass #logging.debug(f'get_url_from_proxy_list: no response object returned for proxy {proxy.get("proxyurl")} for URL {new_urls[index].url}')
             else:
                 proxy_status.append(None)
                 proxy_titles.append(None)
-                pass #logging.debug(f'get_url_from_proxy_list: no response object returned for proxy {proxy.get("proxyurl")} for URL {new_urls[index].url}')
+                logging.debug(f'get_url_from_proxy_list: no response object returned for proxy {proxy.get("proxyurl")} for URL {new_urls[index].url}')
         
         
         # Queue the page results for further processing
@@ -336,8 +321,7 @@ async def get_url_from_proxy_list(url: WorkingURL, proxy_info: list, queue: asyn
         }
 
         asyncio.create_task(queue.put(urls))
-
-        pass #logging.debug(f'{url.url_id}: Status Codes: {url.response.status} {proxy_status} - Titles: "{url.title}", {proxy_titles} for {url.url}')
+        logging.debug(f'{url.url_id}: Status Codes: {url.status} {proxy_status} - Titles: "{url.title}", {proxy_titles} for {url.url}')
 
     except AttributeError as err:
         # Write catestrophic error immediately instead of queuing
@@ -352,51 +336,33 @@ async def get_url_from_proxy_list(url: WorkingURL, proxy_info: list, queue: asyn
 
 
 # Compare good page from direct Internet, proxy1, proxy2 proxies
-async def get_pages_from_proxies(in_queue: asyncio.Queue, out_queue: asyncio.Queue):
-    # aiohttp ssl, proxy, and connection docs: https://docs.aiohttp.org/en/stable/client_advanced.html#client-session
-    # See the following for proxy TLS in TLS: https://github.com/aio-libs/aiohttp/discussions/6044#discussioncomment-1432443
-    try: 
-        # Setup aiohttp sessions
-        DNS_CACHE_SECONDS = 10 # Default is 10 seconds.  Decrease if using millions of domains.
-        PARALLEL_CONNECTIONS = 15 # Simultaneous TCP connections tracked by aiohttp session
-        PER_HOST_CONNECTIONS = 1 # Maximum connections per host.  Keep low.  Default is infinite.
+async def get_pages_from_proxies(in_queue: asyncio.Queue, out_queue: asyncio.Queue, session: aiohttp.ClientSession):
 
-        
-        proxy_tcp_connector1 = aiohttp.TCPConnector(verify_ssl=True, limit = PARALLEL_CONNECTIONS,
-                                                limit_per_host = PER_HOST_CONNECTIONS, ttl_dns_cache = DNS_CACHE_SECONDS)
-                                                
-        proxy_tcp_connector2 = aiohttp.TCPConnector(verify_ssl=True, limit = PARALLEL_CONNECTIONS,
-                                                limit_per_host = PER_HOST_CONNECTIONS, ttl_dns_cache = DNS_CACHE_SECONDS)
-        username = input("Username: ")
-        password = input("Password: ")
+    try: 
+        username = ""
+        password = ""
 
         proxy_info = [
                         {
-                            "proxyurl": f"http://{username}:{password}@{proxy1}:{proxy1_port}", # Proxy1
-                            "port": {proxy1_port},
+                            "proxyurl": f"http://{username}:{password}@204.99.62.249:8080", # Proxy 1
+                            "port": 8080,
                             "session": None,
                             "username": None,
                             "password": None
                         },
                         {
-                            "proxyurl": f"http://{username}:{password}@{proxy2}{proxy2_port}",  # Proxy2
-                            "port": {proxy2_port},
+                            "proxyurl": f"http://{username}:{password}@scdp-proxy-004.corp.cvscaremark.com:9119",  # Proxy2
+                            "port": 9119,
                             "session": None,
                             "username": None,
                             "password": None
                         }
                     ]
-       
-        async with aiohttp.ClientSession(connector = proxy_tcp_connector1) as proxy_session1:
-            async with aiohttp.ClientSession(connector = proxy_tcp_connector2) as proxy_session2:
-                proxy_info[0]["session"] = proxy_session1
-                proxy_info[1]["session"] = proxy_session2
 
-                while True:
-                    url: WorkingURL = await in_queue.get() # Get a working candidate page to test against proxy servers                    
-                        
-                    pass #logging.debug(f"get_pages_from_proxies: comparing proxy server pages for {url.url}")
-                    asyncio.create_task(get_url_from_proxy_list(url, proxy_info, out_queue))
+        while True:
+            url: WorkingURL = await in_queue.get() # Get a working candidate page to test against proxy servers                    
+            logging.debug(f"get_pages_from_proxies: comparing proxy server pages for {url.url}")
+            asyncio.create_task(get_url_from_proxy_list(url, proxy_info, out_queue, session))
 
     except AttributeError as err:
         # Write catestrophic error immediately instead of queuing
@@ -433,75 +399,52 @@ async def publisher(in_queue: asyncio.Queue, out_queues):
 """ BROKEN: Writes records too many times to file
 # Write line to open file.  Launch as task for max asyncio concurrency.
 async def write_csv_line(csv_writer: aiocsv.AsyncWriter, url: WorkingURL):
-    await csv_writer.writerow([url.url_id, url.response.status, url.domain, url.url, url.response.url, url.title, url.rating])
+    await csv_writer.writerow([url.url_id, url.status, url.domain, url.url, url.response_url, url.title, url.rating])
 """
 
 """ BROKEN: Random binary appears when this is called as a task.  An await in the caller works.  The write pointer probably gets trashed.
 async def write_csv_line(file_handle, url: WorkingURL):
-    await file_handle.write(f'"{url.url_id}","{url.response.status}","{url.domain}","{url.url}","{url.response.url}","{url.title}","{url.rating}"\n')
+    await file_handle.write(f'"{url.url_id}","{url.status}","{url.domain}","{url.url}","{url.response_url}","{url.title}","{url.rating}"\n')
 """
 
                        
 def main():
+    
     # AsyncIO event loop setup
-    
-    #loop = asyncio.get_event_loop() # DEPRECATED.  Doesn't work in Python >= v3.10
-
-    # If running windows, bad things happen such as aiofiles not opening file so SelectorEventLoop needed
-    if sys.platform == 'win32':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-    loop = asyncio.new_event_loop()
-    
-    if sys.platform != 'win32':
-        # Signal handler for more graceful shutdown at any point during runtime. 
-        #Build list of supported signals for environment
-        signals = (x for x in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT) if x._name_ in dir(signal))
-
-        #  add_signal_handler Not implemented in Windows but is supported on *NIX and works well.
-        try:
-            for s in signals:
-                loop.add_signal_handler(
-                    # signal=signal fixes late binding with lambda.  Google it.
-                    s, lambda s=s: asyncio.create_task(shutdown(loop, signal=s))
-                )
-            signal_handler_attached = True
-            
-        except NotImplementedError:
-            signal_handler_attached = False
+    try:   
+        # If running windows, bad things happen such as aiofiles not opening file so SelectorEventLoop needed
+        if sys.platform == 'win32':
+            #asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            #asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy)
             pass
 
-    loop.set_exception_handler(handle_exception)
+        #loop = asyncio.get_event_loop() # DEPRECATED.  Doesn't work in Python >= v3.10 for creating new loop
+        loop = asyncio.new_event_loop()
+        
+        if sys.platform != 'win32':
+            # Signal handler for more graceful shutdown at any point during runtime. 
+            #Build list of supported signals for environment
+            signals = (x for x in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT) if x._name_ in dir(signal))
 
-    # Publisher queue chain
-    url_queue = asyncio.Queue() # WorkingURL objects with candidate URLs to get good pages
-    good_page_queue = asyncio.Queue() # WorkingURL objects after page read successfully.  Consumed to write CSV file.
+            #  add_signal_handler Not implemented in Windows but is supported on *NIX and works well.
+            try:
+                for s in signals:
+                    loop.add_signal_handler(
+                        # signal=signal fixes late binding with lambda.  Google it.
+                        s, lambda s=s: asyncio.create_task(shutdown(loop, signal=s))
+                    )
+                signal_handler_attached = True
+                
+            except NotImplementedError:
+                signal_handler_attached = False
+                pass
 
-    # Subscriber queues.  Sends references to WorkingURL objects
-    csv_queue = asyncio.Queue() # subscriber queue of WorkingURL objects for csv writer
-    proxy_queue = asyncio.Queue() # subscriber queue of WorkingURL objects to get proxy server pages from list of proxies
-    write_proxy_results_queue = asyncio.Queue() # Write proxy server query results
-    #subscriber_queues = (csv_queue, proxy_queue) # For publisher coro to distribute good pages to tasks
-    subscriber_queues = (proxy_queue,) # For publisher coro to distribute good pages to tasks
+        
+        loop.set_exception_handler(handle_exception)
 
-    DOMAIN_FILENAME = "domains.txt"
-    PAGEINFO_FILENAME = "page_info.csv"
-    PROXY_PAGEINFO_FILENAME = "proxy_page_info.csv"
-
-    try:
-        # Distribute deep copies of good pages to processing queues.
-        loop.create_task(publisher(good_page_queue, subscriber_queues)) 
-        # Build and publish URLs from domain list.  
-        loop.create_task(make_urls(url_queue, DOMAIN_FILENAME)) 
-        # Test URLs and publish "good" pages. 200 OK, with title, etc.
-        loop.create_task(test_urls(url_queue, good_page_queue)) #
-        # Write good URL data to CSV file.
-        loop.create_task(write_good_page_info(csv_queue, PAGEINFO_FILENAME))
-        # Get pages from a list of proxy servers from queue of "good" directly loaded pages
-        loop.create_task(get_pages_from_proxies(proxy_queue, write_proxy_results_queue))
-        # Write normal and Proxy page results per line for comparison.
-        loop.create_task(write_proxy_page_info(write_proxy_results_queue, PROXY_PAGEINFO_FILENAME))
-        # GO!!!!
+        # Schedule URL work
+        loop.create_task(start_pubsub(loop)) 
+        # Start loop 
         loop.run_forever()
     except Exception as err:
         logging.error(f"main: unknown Exception {type(err).__name__} - {err}")
@@ -511,10 +454,58 @@ def main():
         loop.close()
         logging.info("Successfully shutdown.")
 
-               
-            
+async def start_pubsub(loop):
+    DOMAIN_FILENAME = "domains.txt"
+    PAGEINFO_FILENAME = "page_info.csv"
+    PROXY_PAGEINFO_FILENAME = "proxy_page_info.csv"
+    #aiohttp session setup
+
+    DNS_CACHE_SECONDS = 10 # Default is 10 seconds.  Decrease if using millions of domains.
+    PARALLEL_CONNECTIONS = 3000 # Simultaneous TCP connections tracked by aiohttp session
+    PER_HOST_CONNECTIONS = 5 # Maximum connections per host.  Keep low.  Default is infinite.
+
+
+
+    try:
+        # Publisher queue chain
+        url_queue = asyncio.Queue() # WorkingURL objects with candidate URLs to get good pages
+        good_page_queue = asyncio.Queue() # WorkingURL objects after page read successfully.  Consumed to write CSV file.
+
+        # Subscriber queues.  Sends references to WorkingURL objects
+        csv_queue = asyncio.Queue() # subscriber queue of WorkingURL objects for csv writer
+        proxy_queue = asyncio.Queue() # subscriber queue of WorkingURL objects to get proxy server pages from list of proxies
+        write_proxy_results_queue = asyncio.Queue() # Write proxy server query results
+        #subscriber_queues = (csv_queue, proxy_queue) # For publisher coro to distribute good pages to tasks
+        subscriber_queues = (proxy_queue,) # For publisher coro to distribute good pages to tasks
+
+        direct_tcp_connector = aiohttp.TCPConnector(verify_ssl=True, limit = PARALLEL_CONNECTIONS,
+                                                    limit_per_host = PER_HOST_CONNECTIONS, ttl_dns_cache = DNS_CACHE_SECONDS)
+        client_timeout = aiohttp.ClientTimeout(total=120.0, connect = 60.0, sock_connect = 30.0, sock_read = 30.0)
+        
+        session = aiohttp.ClientSession(connector = direct_tcp_connector, timeout = client_timeout)
+
+        
+        # Distribute deep copies of good pages to processing queues.
+        loop.create_task(publisher(good_page_queue, subscriber_queues)) 
+        # Build and publish URLs from domain list.  
+        loop.create_task(make_urls(url_queue, DOMAIN_FILENAME)) 
+        # Test URLs and publish "good" pages. 200 OK, with title, etc.
+        loop.create_task(test_urls(url_queue, good_page_queue, session)) #
+        # Write good URL data to CSV file.
+        #loop.create_task(write_good_page_info(csv_queue, PAGEINFO_FILENAME))
+        # Get pages from a list of proxy servers from queue of "good" directly loaded pages
+        loop.create_task(get_pages_from_proxies(proxy_queue, write_proxy_results_queue, session))
+        # Write normal and Proxy page results per line for comparison.
+        loop.create_task(write_proxy_page_info(write_proxy_results_queue, PROXY_PAGEINFO_FILENAME))
+             
+    except Exception as err:
+        logging.error(f"main: unknown Exception {type(err).__name__} - {err}")
+
 if __name__ == '__main__':    
  
+    # Global semaphore to constrain parallel url gets.
+    SEMAPHORE_LIMIT = 100
+    #sem = asyncio.Semaphore(SEMAPHORE_LIMIT)
     # Set up logging
     #LOG_LEVEL = logging.ERROR
     LOG_LEVEL = logging.WARN
